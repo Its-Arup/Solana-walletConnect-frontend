@@ -21,6 +21,7 @@ export const SignAndConnect = () => {
       }
     }
   }, [address])
+  
 
   // Fetch balance when connected and signed
   useEffect(() => {

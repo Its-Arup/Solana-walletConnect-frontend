@@ -1,6 +1,9 @@
 import { useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from '@reown/appkit/react'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
+import bs58 from 'bs58'
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 export const SignAndConnect = () => {
   const { open } = useAppKit()
@@ -10,18 +13,53 @@ export const SignAndConnect = () => {
   const [isSigned, setIsSigned] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [balance, setBalance] = useState<number | null>(null)
+  const [user, setUser] = useState<any>(null)
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    // Initialize from sessionStorage on mount
+    return sessionStorage.getItem('authToken')
+  })
   const userDisconnectedRef = useRef(false)
 
-  // Load signed state from localStorage on mount
+  // Load and verify existing session on mount
   useEffect(() => {
-    if (address) {
-      const signedState = localStorage.getItem(`wallet_signed_${address}`)
-      if (signedState === 'true') {
-        setIsSigned(true)
+    const verifySession = async () => {
+      const storedToken = sessionStorage.getItem('authToken')
+      
+      if (storedToken && isConnected) {
+        try {
+          const response = await fetch(`${API_URL}/api/auth/me`, {
+            headers: {
+              'Authorization': `Bearer ${storedToken}`,
+            },
+          })
+          
+          if (response.ok) {
+            const data = await response.json()
+            setUser(data.user)
+            setIsSigned(true)
+            setAuthToken(storedToken)
+            console.log('✅ Session restored from sessionStorage')
+          } else {
+            // Token is invalid, clear it
+            sessionStorage.removeItem('authToken')
+            setAuthToken(null)
+            setIsSigned(false)
+            setUser(null)
+          }
+        } catch (error) {
+          console.error('Session verification error:', error)
+          sessionStorage.removeItem('authToken')
+          setAuthToken(null)
+          setIsSigned(false)
+        }
       }
     }
-  }, [address])
-  
+
+    if (isConnected && !userDisconnectedRef.current) {
+      verifySession()
+    }
+  }, [isConnected])
+
 
   // Fetch balance when connected and signed
   useEffect(() => {
@@ -55,14 +93,46 @@ export const SignAndConnect = () => {
       
       // Request signature from the wallet
       const provider = walletProvider as any
-      const signature = await provider.signMessage(encodedMessage)
+      const signatureUint8 = await provider.signMessage(encodedMessage)
       
-      if (signature) {
+      if (signatureUint8) {
+        // Convert signature to base58
+        const signature = bs58.encode(signatureUint8)
         console.log('Message signed successfully!')
         console.log('Signature:', signature)
-        setIsSigned(true)
-        // Persist signed state to localStorage
-        localStorage.setItem(`wallet_signed_${address}`, 'true')
+        
+        // Send to backend for verification
+        const response = await fetch(`${API_URL}/api/auth/verify`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            walletAddress: address,
+            message,
+            signature,
+          }),
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          console.log(data.message)
+          setUser(data.user)
+          setAuthToken(data.token)
+          // Persist JWT token to sessionStorage
+          sessionStorage.setItem('authToken', data.token)
+          setIsSigned(true)
+          
+          if (data.user.isNewUser) {
+            console.log('🎉 Welcome! New user created.')
+          } else {
+            console.log('👋 Welcome back!')
+          }
+        } else {
+          console.error('Backend verification failed:', data.message)
+          alert('Signature verification failed')
+        }
       }
     } catch (error) {
       console.error('Error signing message:', error)
@@ -77,24 +147,22 @@ export const SignAndConnect = () => {
   }, [walletProvider, address])
 
   useEffect(() => {
-    if (isConnected && !isSigned && walletProvider && address && !userDisconnectedRef.current) {
-      // Check if already signed
-      const signedState = localStorage.getItem(`wallet_signed_${address}`)
-      if (signedState !== 'true') {
-        handleSignMessage()
-      }
+    if (isConnected && !isSigned && walletProvider && address && !userDisconnectedRef.current && !authToken) {
+      // Only prompt for signature if no valid token
+      handleSignMessage()
     }
-  }, [isConnected, walletProvider, isSigned, handleSignMessage, address])
+  }, [isConnected, walletProvider, isSigned, handleSignMessage, address, authToken])
 
   // Clear signed state when wallet disconnects
   useEffect(() => {
-    if (!isConnected) {
-      if (address) {
-        localStorage.removeItem(`wallet_signed_${address}`)
-      }
+    if (!isConnected && userDisconnectedRef.current) {
+      // Only clear session if user explicitly disconnected
+      sessionStorage.removeItem('authToken')
       setIsSigned(false)
-    } else {
-      // Reset the flag when user reconnects
+      setAuthToken(null)
+      setUser(null)
+    } else if (!isConnected && !userDisconnectedRef.current) {
+      // Wallet disconnected unexpectedly, keep token for reconnection
       userDisconnectedRef.current = false
     }
   }, [isConnected, address])
@@ -106,10 +174,11 @@ export const SignAndConnect = () => {
   }
 
   const handleDisconnect = async () => {
-    if (address) {
-      localStorage.removeItem(`wallet_signed_${address}`)
-    }
+    // Clear all auth state
+    sessionStorage.removeItem('authToken')
     setIsSigned(false)
+    setUser(null)
+    setAuthToken(null)
     userDisconnectedRef.current = true
     // Use AppKit's disconnect method
     await disconnect()
@@ -138,13 +207,21 @@ export const SignAndConnect = () => {
             <p>Please sign the message in your wallet...</p>
           ) : isSigned ? (
             <div>
-              <p style={{ color: '#4ade80' }}>✓ Wallet Connected & Authenticated</p>
+              <p style={{ color: '#4ade80' }}>
+                ✓ Wallet Connected & Authenticated
+                {user?.isNewUser && <span style={{ marginLeft: '8px' }}>🎉 New User!</span>}
+              </p>
               <p style={{ fontSize: '14px', marginTop: '8px' }}>
                 <strong>Address:</strong> {address?.slice(0, 4)}...{address?.slice(-4)}
               </p>
               {balance !== null && (
                 <p style={{ fontSize: '16px', marginTop: '8px', color: '#60a5fa' }}>
                   <strong>Balance:</strong> {balance.toFixed(4)} SOL
+                </p>
+              )}
+              {user && (
+                <p style={{ fontSize: '12px', marginTop: '8px', color: '#888' }}>
+                  Member since: {new Date(user.createdAt).toLocaleDateString()}
                 </p>
               )}
               <button 

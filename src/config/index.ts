@@ -1,4 +1,9 @@
 import { SolanaAdapter } from "@reown/appkit-adapter-solana/react";
+import { 
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+  TrustWalletAdapter
+} from "@solana/wallet-adapter-wallets";
 
 // Get projectId from https://dashboard.reown.com
 export const projectId =
@@ -8,7 +13,11 @@ if (!projectId) {
   throw new Error("Project ID is not defined");
 }
 
-// setup Solana Adapter
+// setup Solana Adapter with multiple wallet support
 export const solanaWeb3JsAdapter = new SolanaAdapter({
-  wallets: [],
+  wallets: [
+    new PhantomWalletAdapter(),
+    new SolflareWalletAdapter(),
+    new TrustWalletAdapter()
+  ],
 });

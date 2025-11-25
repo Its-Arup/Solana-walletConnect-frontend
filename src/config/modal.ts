@@ -7,7 +7,7 @@ import { solanaDevnet, type AppKitNetwork } from "@reown/appkit/networks";
 const metadata = {
   name: "Solana Wallet Connect",
   description: "Connect your Solana wallet",
-  url: "http://localhost:5174",
+  url: "http://localhost:5173",
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 
